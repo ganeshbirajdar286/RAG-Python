@@ -1,27 +1,73 @@
-from dotenv import  load_dotenv
-from langchain_mistralai import ChatMistralAI
-from langchain_community.document_loaders  import PyPDFLoader
-from langchain_core.prompts  import ChatPromptTemplate
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-
+from  dotenv import load_dotenv
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import Chroma
+from langchain_mistralai  import ChatMistralAI
+from langchain_core.prompts import ChatPromptTemplate
+import os
 
 load_dotenv()
 
-model = ChatMistralAI(model = "mistral-small-2506",temperature=0);
+embedding_model=HuggingFaceEmbeddings(
+    model_name="sentence-transformers/all-MiniLM-L6-v2"
+)
 
-template =ChatPromptTemplate.from_messages([
-    ("system","you are the ai for summarly text" ),
-    ("human","{data}")
-])
+vectorStore=Chroma(
+    persist_directory="chroma_db",
+    embedding_function=embedding_model
+)
 
-data=PyPDFLoader("deep.pdf")
-docs =data.load()
-text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-chucks=text_splitter.split_documents(docs)
+retriever=vectorStore.as_retriever(
+    search_type="mmr",
+    search_kwargs={"k":4,
+                   "fetch_k":10, # first it search with similarity and find 10 records and then applys the mmr  of 10 records  and find best  4
+                    "lambda_mult":0.5 # tell about diversed result .it's value are from 0 to 1 and if 0 no diversed ans  
+                   }
+)
 
-print(chucks[0].page_content)
+llm=ChatMistralAI(model="mistral-small-2506")
 
-prompt =template.format_messages(data = chucks[0].page_content)
+#prompt template
+prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """You are a helpful AI assistant.
 
-result =model.invoke(prompt)
-print(result.content)
+Use ONLY the provided context to answer the question.
+
+If the answer is not present in the context,
+say: "I could not find the answer in the document."
+"""
+        ),
+        (
+            "human",
+            """Context:
+{context}
+
+Question:
+{question}
+"""
+        )
+    ]
+)
+
+print("RAG system created ")
+
+print("press 0 to exit")
+
+while True:
+    query=input("you:")
+    if query =="0":
+        break;
+    else :
+        docs=retriever.invoke(query)
+        context="\n\n".join(
+            [doc.page_content for doc  in docs]
+        )
+
+    final_prompt=prompt.invoke({
+        "context":context,"question":query
+    })
+
+    response =llm.invoke(final_prompt)
+    print(f"]\n AI:{response.content} ")
